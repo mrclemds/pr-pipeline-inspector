@@ -108,6 +108,7 @@ Optional arguments:
 
 ```text
 --azure-cli PATH_OR_COMMAND  Azure CLI command; defaults to az
+--organization URL          Azure DevOps organization URL (also --org)
 --verbose                    Print every command executed by the inspector
 ```
 
@@ -126,7 +127,7 @@ Azure DevOps queries the merge ref `refs/pull/PR_NUMBER/merge` through `az devop
 
 The CLI deliberately outputs commands rather than browser links. Commands work in authenticated terminal sessions and preserve an auditable, reproducible investigation path.
 
-GitHub uses the repository supplied by `--repo`. Azure uses the project supplied by `--project`; Azure organization context must already be configured for `az devops`.
+GitHub uses the repository supplied by `--repo`. Azure uses the project supplied by `--project`. If `--organization`/`--org` is supplied, the inspector passes it to Azure queries and includes it in generated log and artifact commands. Otherwise, Azure organization context must already be configured for `az devops` or discovered from a Git remote.
 
 ## Azure Project Discovery
 
@@ -136,7 +137,7 @@ When the Azure DevOps project is unknown, inspect GitHub PR check metadata first
 ./pr-pipeline-inspector 42 --repo owner/repository --discover-azure-project --verbose
 ```
 
-The command discovers Azure DevOps URLs from external checks and reports each organization, project identifier, build ID, check result, and source URL. Use the discovered project identifier with the Azure backend.
+The command discovers Azure DevOps URLs from external checks and reports each organization, project identifier, build ID, check result, and source URL. Its suggested Azure command includes the discovered organization URL. Use that command, or pass `--organization https://dev.azure.com/ORG` alongside the project explicitly.
 
 ## Examples
 

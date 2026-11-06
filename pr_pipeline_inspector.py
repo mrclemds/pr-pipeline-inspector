@@ -64,11 +64,15 @@ def discover_azure_projects(pr_number: int, repository: str) -> list[dict[str, A
         path = [part for part in parsed.path.split("/") if part]
         if parsed.netloc.endswith(".visualstudio.com") and path:
             organization, project = parsed.netloc.split(".", 1)[0], path[0]
+            organization_url = f"{parsed.scheme}://{parsed.netloc}"
         elif parsed.netloc == "dev.azure.com" and len(path) >= 2:
             organization, project = path[0], path[1]
+            organization_url = f"{parsed.scheme}://{parsed.netloc}/{organization}"
         else:
             continue
-        candidate = projects.setdefault((organization, project), {"organization": organization, "project": project, "checks": []})
+        candidate = projects.setdefault((organization, project), {
+            "organization": organization, "organization_url": organization_url, "project": project, "checks": [],
+        })
         candidate["checks"].append({
             "name": check.get("name") or check.get("context") or "unnamed",
             "result": check.get("conclusion") or check.get("state") or "unknown",
@@ -90,7 +94,8 @@ def print_azure_projects(pr_number: int, repository: str, projects: list[dict[st
             build = f", build {check['build_id']}" if check["build_id"] else ""
             print(f"  {check['name']}: {check['result']}{build}\n    {check['url']}")
         print("Inspection command:")
-        print(f"  pr-pipeline-inspector {pr_number} --backend azure --project {candidate['project']} --azure-cli azure-devops-cli --verbose")
+        organization_url = candidate["organization_url"]
+        print(f"  pr-pipeline-inspector {pr_number} --backend azure --project {candidate['project']} --organization {organization_url} --azure-cli azure-devops-cli --verbose")
 
 
 def github_run(pr_number: int, repository: str) -> Run:
@@ -127,9 +132,11 @@ def github_run(pr_number: int, repository: str) -> Run:
     )
 
 
-def azure_run(pr_number: int, project: str, azure_cli: str) -> Run:
+def azure_run(pr_number: int, project: str, azure_cli: str, organization: str | None = None) -> Run:
+    organization_args = ["--org", organization] if organization else []
     builds = response_values(run_json([
         azure_cli, "devops", "invoke", "--area", "build", "--resource", "builds",
+        *organization_args,
         "--route-parameters", f"project={project}",
         "--query-parameters", f"branchName=refs/pull/{pr_number}/merge&queryOrder=finishTimeDescending&$top=1",
         "--api-version", "7.1",
@@ -140,14 +147,17 @@ def azure_run(pr_number: int, project: str, azure_cli: str) -> Run:
     build_id = str(latest["id"])
     timeline = run_json([
         azure_cli, "devops", "invoke", "--area", "build", "--resource", "timeline",
+        *organization_args,
         "--route-parameters", f"project={project}", f"buildId={build_id}", "--api-version", "7.1",
     ])
     artifacts = response_values(run_json([
         azure_cli, "devops", "invoke", "--area", "build", "--resource", "artifacts",
+        *organization_args,
         "--route-parameters", f"project={project}", f"buildId={build_id}", "--api-version", "7.1",
     ]))
     logs = response_values(run_json([
         azure_cli, "devops", "invoke", "--area", "build", "--resource", "logs",
+        *organization_args,
         "--route-parameters", f"project={project}", f"buildId={build_id}", "--api-version", "7.1",
     ]))
     if not logs:
@@ -163,7 +173,8 @@ def azure_run(pr_number: int, project: str, azure_cli: str) -> Run:
     report_artifacts = [
         (
             artifact["name"],
-            f"{azure_cli} devops invoke --area build --resource artifacts --route-parameters "
+            f"{azure_cli} devops invoke --area build --resource artifacts "
+            f"{('--org ' + organization + ' ') if organization else ''}--route-parameters "
             f"project={project} buildId={build_id} artifactName={artifact['name']} --api-version 7.1",
         )
         for artifact in artifacts
@@ -175,7 +186,8 @@ def azure_run(pr_number: int, project: str, azure_cli: str) -> Run:
         status=latest.get("status", "unknown"),
         conclusion=latest.get("result") or "pending",
         name=latest.get("definition", {}).get("name", "Azure Pipeline"),
-        log_command=f"{azure_cli} devops invoke --area build --resource logs --route-parameters project={project} "
+        log_command=f"{azure_cli} devops invoke --area build --resource logs "
+        f"{('--org ' + organization + ' ') if organization else ''}--route-parameters project={project} "
         f"buildId={build_id} logId={latest_log_id} --api-version 7.1 > build-{build_id}-log-{latest_log_id}.log",
         stages=stages,
         artifacts=report_artifacts,
@@ -212,6 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--repo", help="GitHub repository in OWNER/REPO form")
     parser.add_argument("--discover-azure-project", action="store_true", help="Discover Azure DevOps projects from GitHub PR checks")
     parser.add_argument("--project", help="Azure DevOps project")
+    parser.add_argument("--organization", "--org", help="Azure DevOps organization URL, e.g. https://dev.azure.com/ORG")
     parser.add_argument("--azure-cli", default="az", help="Azure CLI command")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -235,7 +248,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 parser.error("--project is required with --backend azure")
             if not shutil.which(args.azure_cli):
                 raise CommandError(f"Azure DevOps CLI wrapper is unavailable: {args.azure_cli}")
-            run = azure_run(args.pr_number, args.project, args.azure_cli)
+            run = azure_run(args.pr_number, args.project, args.azure_cli, args.organization)
         print_run(args.pr_number, args.backend, run)
         return 0
     except CommandError as error:

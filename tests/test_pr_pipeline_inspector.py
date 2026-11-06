@@ -18,6 +18,7 @@ class PipelineInspectorTests(unittest.TestCase):
         with patch.object(inspector, "run_json", return_value=payload):
             projects = inspector.discover_azure_projects(42, "owner/repo")
         self.assertEqual(projects[0]["organization"], "org")
+        self.assertEqual(projects[0]["organization_url"], "https://org.visualstudio.com")
         self.assertEqual(projects[0]["project"], "project-id")
         self.assertEqual(projects[0]["checks"][0]["build_id"], "10")
 
@@ -51,3 +52,23 @@ class PipelineInspectorTests(unittest.TestCase):
         self.assertEqual(run.stages, [("Build", "completed", "succeeded", "2")])
         self.assertIn("--resource artifacts", run.artifacts[0][1])
         self.assertIn("logId=3", run.log_command)
+
+    def test_azure_run_passes_optional_organization_to_queries_and_commands(self):
+        responses = iter([
+            [{"id": 12, "status": "completed", "result": "succeeded", "definition": {"name": "CI"}}],
+            {"records": []},
+            [{"name": "report"}],
+            [{"id": 3}],
+        ])
+        commands = []
+
+        def fake_run_json(command):
+            commands.append(command)
+            return next(responses)
+
+        with patch.object(inspector, "run_json", side_effect=fake_run_json):
+            run = inspector.azure_run(42, "Project", "az", "https://dev.azure.com/org")
+
+        self.assertTrue(all(command[command.index("invoke") + 1:command.index("--route-parameters")][-2:] == ["--org", "https://dev.azure.com/org"] for command in commands))
+        self.assertIn("--org https://dev.azure.com/org", run.log_command)
+        self.assertIn("--org https://dev.azure.com/org", run.artifacts[0][1])
